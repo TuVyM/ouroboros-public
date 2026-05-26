@@ -27,7 +27,13 @@ import websockets
 try:
     from .config import SYMBOLS, BUFFER_SIZE, BINANCE_WS_URL
 except ImportError:
-    from config import SYMBOLS, BUFFER_SIZE, BINANCE_WS_URL
+    try:
+        from config import SYMBOLS, BUFFER_SIZE, BINANCE_WS_URL
+    except ImportError:
+        # Fallback defaults used when config.py is absent (e.g. tests, CI)
+        SYMBOLS = ["BTCUSDT"]
+        BUFFER_SIZE = 1500
+        BINANCE_WS_URL = "wss://fstream.binance.com/stream"
 
 log = logging.getLogger(__name__)
 

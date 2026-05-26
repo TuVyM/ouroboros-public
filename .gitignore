@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Data (large, regenerable — run pretrain.py to rebuild)
+data_cache/
+data/
+checkpoints/
+downloads/
+logs/
+
+# Model binaries (run training scripts to regenerate)
+lgbm/*.lgbm
+lgbm/shadow_backups/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/

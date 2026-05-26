@@ -5,7 +5,7 @@ from typing import Tuple, Union
 import numpy as np
 import pandas as pd
 
-WINDOW = 89  # matches WORLD_MODEL_WINDOW in config
+WINDOW = 89  # Fibonacci — 89-bar lookback for orderflow feature construction
 
 FEATURE_NAMES = [
     # --- Orderflow (from Binance klines + funding) ---

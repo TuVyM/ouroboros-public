@@ -32,26 +32,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-import torch
 
 log = logging.getLogger(__name__)
 
-_PHI = 1.6180339887498949
-
-# Candle window expected by the WM encoder (same as fast_backtest)
-WORLD_MODEL_WINDOW   = int(os.environ.get("WORLD_MODEL_WINDOW",   64))
-CHRONOS_INPUT_WINDOW = int(os.environ.get("CHRONOS_INPUT_WINDOW", 64))
-
-WORLD_MODEL_CHECKPOINT   = os.environ.get("WORLD_MODEL_CHECKPOINT",   str(_HERE / "checkpoints" / "v4_base"))
-ACTOR_CRITIC_CHECKPOINT  = os.environ.get("ACTOR_CRITIC_CHECKPOINT",  str(_HERE / "checkpoints" / "v4_actor"))
-
-MIN_CONFIDENCE = float(os.environ.get("MIN_CONFIDENCE", "0.55"))
-MAX_POSITION_PCT = float(os.environ.get("MAX_POSITION_PCT", "0.02"))
+MIN_CONFIDENCE       = float(os.environ.get("MIN_CONFIDENCE",       "0.55"))
+MAX_POSITION_PCT     = float(os.environ.get("MAX_POSITION_PCT",     "0.02"))
 PAPER_PORTFOLIO_USDC = float(os.environ.get("PAPER_PORTFOLIO_USDC", "300.0"))
-FEE_PCT = 0.0004
-
-STOP_LOSS_PCT = 0.00382
-TP_MULT       = _PHI
+FEE_PCT              = 0.0004
 
 
 # Module-level references so unit-test patches (patch("live_trader.X")) resolve correctly.
@@ -107,96 +94,23 @@ def _compute_ob_imbalance(order_book) -> float:
     return float((bid_vol - ask_vol) / (bid_vol + ask_vol + 1e-8))
 
 
-def _build_pos_state(
-    position,
-    price: float,
-    tick: int,
-    closes: np.ndarray,
-    highs: np.ndarray,
-    lows: np.ndarray,
-    regime_idx: int,
-    bvr: float,
-    bph: int,
-) -> torch.Tensor:
-    """Build pos_state (1, 10) matching train_actor_critic feature order exactly.
-
-    Features:
-      0  open_flag        — 1.0 if position is open
-      1  pnl_pct          — unrealised P&L as fraction (0 if flat)
-      2  ticks_held/100   — bars held / 100
-      3  mom_8h           — 8h log-return (bph-normalised)
-      4  ret_1h           — 1h log-return
-      5  ret_24h          — 24h log-return
-      6  close_vs_sma24   — deviation from 24h SMA
-      7  atr_ratio        — cur bar H-L / mean 24h H-L  - 1
-      8  regime           — regime_idx - 1  →  {-1, 0, 1}
-      9  buy_vol_ratio    — taker-buy fraction [0,1]; 0.5 if unknown (tick_delta absent)
-
-    Lookbacks that exceed the available buffer fall back to 0.0 gracefully.
-    """
-    n  = len(closes)
-    hl = highs - lows
-
-    ret_1h = float(np.clip(
-        np.log(closes[-1] / (closes[-1 - bph] + 1e-8)), -0.05, 0.05
-    )) if n > bph else 0.0
-
-    ret_24h = float(np.clip(
-        np.log(closes[-1] / (closes[-1 - 24 * bph] + 1e-8)), -0.20, 0.20
-    )) if n > 24 * bph else 0.0
-
-    sma24 = float(closes[-24 * bph:].mean()) if n >= 24 * bph else float(closes.mean())
-    cvs   = float(np.clip((closes[-1] - sma24) / (sma24 + 1e-8), -0.10, 0.10))
-
-    mom_8h = float(np.clip(
-        np.log(closes[-1] / (closes[-1 - 8 * bph] + 1e-8)), -0.10, 0.10
-    )) if n > 8 * bph else 0.0
-
-    mean_hl   = float(hl[-24 * bph:].mean()) if n >= 24 * bph else (float(hl.mean()) or 1e-8)
-    atr_ratio = float(np.clip(float(hl[-1]) / (mean_hl + 1e-8) - 1.0, -1.0, 2.0))
-
-    ps = torch.zeros(1, 10)
-    ps[0, 3] = mom_8h
-    ps[0, 4] = ret_1h
-    ps[0, 5] = ret_24h
-    ps[0, 6] = cvs
-    ps[0, 7] = atr_ratio
-    ps[0, 8] = float(regime_idx - 1)
-    ps[0, 9] = float(np.clip(bvr, 0.0, 1.0))
-
-    if position is not None:
-        is_buy  = position.direction == 'buy'
-        raw_pnl = (price - position.entry_price) / position.entry_price
-        pnl_pct = raw_pnl if is_buy else -raw_pnl
-        ps[0, 0] = 1.0
-        ps[0, 1] = float(pnl_pct)
-        ps[0, 2] = min(float(tick - position.entry_tick) / 100.0, 5.0)
-
-    return ps
-
-
 class LiveTrader:
-    """Bar-by-bar live trading engine.
+    """Bar-by-bar live trading engine (LGBM mode).
 
     Initialise once, then call on_candle() for each closed candle.
-    Manages position state, invokes WM + actor, pushes experiences to shadow.
+    Routes each bar through RegimeDetector → Trend or Range LGBM → position manager.
     """
 
-    def __init__(self, symbol: str, device: str = 'cuda',
-                 dry_run: bool = True, shadow_trainer=None, bph: int = 60,
-                 use_swarm: bool = False, use_lgbm: bool = False,
-                 scalp_layer=None):
+    def __init__(self, symbol: str, dry_run: bool = True, bph: int = 60,
+                 use_lgbm: bool = True, scalp_layer=None):
         self.symbol        = symbol
-        self.device        = device
         self.dry_run       = dry_run
-        self.shadow        = shadow_trainer
         self._bph          = bph          # bars per hour: 60 for 1m, 1 for 1h
-        self._buf_cap      = max(WORLD_MODEL_WINDOW * 2, 25 * bph)  # enough for all bph lookbacks
+        self._buf_cap      = 25 * bph     # enough for all bph lookbacks (25h at bph cadence)
         self.balance       = PAPER_PORTFOLIO_USDC
         self.position: Optional[_LivePosition] = None
         self.tick          = 0
         self._ohlcv_buf    = []   # rolling window of closed candles
-        self._use_swarm    = use_swarm
         self._use_lgbm     = use_lgbm
         self._warmup: bool = False
 
@@ -218,25 +132,12 @@ class LiveTrader:
                 self._lgbm._trend_model.num_feature(),
                 self._lgbm._range_model.num_feature(),
             ) if self._encoder is not None else log.info("No finetuned.pt — bare 24/29-feature matrices")
-            self.wm = None
-            self.ac = None
-            log.info("LiveTrader initialised (LGBM mode): symbol=%s dry_run=%s", symbol, dry_run)
-        elif use_swarm:
-            from llm_swarm import LLMSwarm, LLMSwarmError
-            self._swarm = LLMSwarm()
-            self._LLMSwarmError = LLMSwarmError
-            self.wm = None
-            self.ac = None
-            log.info("LiveTrader initialised (LLM swarm mode): symbol=%s dry_run=%s", symbol, dry_run)
+            log.info("LiveTrader initialised: symbol=%s dry_run=%s", symbol, dry_run)
         else:
-            from world_model import WorldModelWrapper, ActorCriticWrapper
-            # Load live models
-            self.wm = WorldModelWrapper(device=device, checkpoint_path=WORLD_MODEL_CHECKPOINT)
-            self.wm.load()
-            self.ac = ActorCriticWrapper(
-                self.wm.model, device=device, checkpoint_path=ACTOR_CRITIC_CHECKPOINT)
-            self.ac.load()
-            log.info("LiveTrader initialised: symbol=%s device=%s dry_run=%s", symbol, device, dry_run)
+            raise ValueError(
+                "LiveTrader only supports LGBM mode in this release. "
+                "Pass use_lgbm=True (default) or use --lgbm on the CLI."
+            )
 
     def on_candle(self, ohlcv: np.ndarray, bvr: float = 0.5,
                   htf_1h: Optional[np.ndarray] = None,
@@ -347,78 +248,8 @@ class LiveTrader:
             self._tick_1m += 1
             return {'signal': sig, 'confidence': conf, 'regime': -1}
 
-        # WM / Swarm paths need _ohlcv_buf warmup; LGBM does not.
-        if len(self._ohlcv_buf) < WORLD_MODEL_WINDOW:
-            return {'signal': 'hold', 'confidence': 0.0, 'regime': -1}
-
-        window = np.stack(self._ohlcv_buf[-WORLD_MODEL_WINDOW:])   # (W, 5)
-
-        # ── LLM Swarm path ──────────────────────────────────────────────────
-        if self._use_swarm:
-            pos_dict = {
-                "open_flag":   int(self.position is not None),
-                "pnl_pct":     float(
-                    ((price - self.position.entry_price) / self.position.entry_price
-                     * (1 if self.position.direction == 'buy' else -1))
-                    if self.position is not None else 0.0
-                ),
-                "ticks_held":  int(self.tick - self.position.entry_tick)
-                               if self.position is not None else 0,
-            }
-            try:
-                result = self._swarm.decide(window, pos_dict)
-            except self._LLMSwarmError as e:
-                log.error("LLMSwarmError: %s — shutting down", e)
-                os.kill(os.getpid(), signal.SIGTERM)
-                return {"signal": "hold", "confidence": 0.0, "regime": -1}
-            sig  = result['signal']
-            conf = result['confidence']
-            regime_idx = result.get('regime', -1)
-            # No shadow trainer support in swarm mode (no h_s/z_s)
-            self._manage_position(sig, conf, price, None, None, None, regime_idx)
-            self.tick += 1
-            return {'signal': sig, 'confidence': conf, 'regime': regime_idx}
-
-        # ── WM / Actor-Critic path (default) ────────────────────────────────
-        with torch.inference_mode():
-            ohlcv_t, book_t = self.wm.preprocess(window, None)
-            embs = self.wm.model.encoder(ohlcv_t.to(self.device), book_t.to(self.device))
-            h_s, z_s = self.wm._rssm_states.get(self.symbol, (None, None))
-            _, new_h, new_z = self.wm.model.forward_from_embeddings(embs, h=h_s, z=z_s)
-            self.wm._rssm_states[self.symbol] = (new_h.detach(), new_z.detach())
-            h_s, z_s = new_h.detach(), new_z.detach()
-
-            regime_idx = int(
-                self.wm.model.regime_head(
-                    torch.cat([h_s, z_s], dim=-1)
-                ).argmax(dim=-1).item()
-            )
-
-        # Build features from the full available buffer (bph-normalised lookbacks)
-        buf_arr = np.stack(self._ohlcv_buf)
-        closes  = buf_arr[:, 3].astype(np.float64)
-        highs   = buf_arr[:, 1].astype(np.float64)
-        lows    = buf_arr[:, 2].astype(np.float64)
-
-        ps = _build_pos_state(
-            position=self.position, price=price, tick=self.tick,
-            closes=closes, highs=highs, lows=lows,
-            regime_idx=regime_idx, bvr=bvr, bph=self._bph,
-        ).to(self.device)
-
-        ac_result = self.ac.decide(h_s, z_s, pos_state=ps)
-        sig  = ac_result['signal']
-        conf = ac_result['confidence']
-
-        # Push bar to shadow trainer
-        if self.shadow is not None:
-            self.shadow.push_bar(window, h_s, z_s)
-            self.shadow.set_position_open(self.position is not None)
-
-        # Position management
-        self._manage_position(sig, conf, price, h_s, z_s, ps, regime_idx)
-        self.tick += 1
-        return {'signal': sig, 'confidence': conf, 'regime': regime_idx}
+        # Unreachable in LGBM mode (raised in __init__), kept for type-checker
+        return {'signal': 'hold', 'confidence': 0.0, 'regime': -1}
 
     def _manage_position_lgbm(
         self, sig: str, conf: float, price: float,
@@ -585,56 +416,6 @@ class LiveTrader:
 
         return False
 
-    def _manage_position(self, sig, conf, price, h_s, z_s, ps, regime_idx):
-        action_idx = {'buy': 0, 'sell': 1, 'hold': 2}.get(sig, 2)
-
-        if self.position is not None:
-            is_buy  = self.position.direction == 'buy'
-            tp_hit  = (is_buy and price >= self.position.take_profit) or \
-                      (not is_buy and price <= self.position.take_profit)
-            sl_hit  = (is_buy and price <= self.position.stop_loss) or \
-                      (not is_buy and price >= self.position.stop_loss)
-
-            if tp_hit or sl_hit:
-                raw_pnl = (price - self.position.entry_price) / self.position.entry_price
-                pnl_pct = raw_pnl if is_buy else -raw_pnl
-                fee     = self.position.size_usdc * FEE_PCT * 2
-                pnl     = self.position.size_usdc * pnl_pct - fee
-                self.balance += pnl
-                reason = 'take_profit' if tp_hit else 'stop_loss'
-                log.info("Trade closed: %s dir=%s pnl=%.2f balance=%.2f",
-                         reason, self.position.direction, pnl, self.balance)
-                if self.shadow is not None and h_s is not None:
-                    self.shadow.push_trade(h_s, z_s, ps, action_idx, pnl)
-                self.position = None
-
-        if self.position is None and sig in ('buy', 'sell') and conf >= MIN_CONFIDENCE:
-            kelly_f  = max(0.0, (conf * TP_MULT - (1 - conf)) / TP_MULT)
-            size_pct = min(kelly_f * 0.25, MAX_POSITION_PCT)
-            size     = self.balance * size_pct
-            if size < 1.0:
-                return
-            sl_dist = price * STOP_LOSS_PCT
-            tp_dist = price * STOP_LOSS_PCT * TP_MULT
-            if sig == 'buy':
-                sl = price - sl_dist
-                tp = price + tp_dist
-            else:
-                sl = price + sl_dist
-                tp = price - tp_dist
-            self.position = _LivePosition(
-                direction=sig, entry_price=price, size_usdc=size,
-                stop_loss=sl, take_profit=tp, entry_tick=self.tick,
-                regime_idx=regime_idx,
-            )
-            if not self.dry_run:
-                log.info("Trade opened: %s price=%.2f size=%.2f sl=%.2f tp=%.2f",
-                         sig, price, size, sl, tp)
-            else:
-                log.debug("[DRY RUN] Trade opened: %s price=%.2f size=%.2f",
-                          sig, price, size)
-
-
 def _run_warmup(trader: "LiveTrader", symbol: str, n_bars: int) -> None:
     """Replay the last `n_bars` 1m bars from cache through the trader (no trades).
 
@@ -712,20 +493,12 @@ def main():
     )
     parser = argparse.ArgumentParser(description="Ouroboros live trader")
     parser.add_argument("--symbol",  default="BTCUSDT")
-    parser.add_argument("--device",  default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--dry-run", action="store_true", default=True,
                         help="Paper trading only (default). Set DRY_RUN=false in env to disable.")
-    parser.add_argument("--no-shadow", action="store_true",
-                        help="Disable shadow trainer daemon.")
-    parser.add_argument("--swap-cooldown", type=int, default=3600,
-                        help="Minimum seconds between weight swaps (default 3600).")
     parser.add_argument("--interval", choices=['1m', '5m', '1h'], default='1m',
                         help="Candle interval (default 1m). Sets bars-per-hour for feature lookbacks.")
-    parser.add_argument("--swarm", action="store_true",
-                        help="Use LLM swarm instead of world model for decisions.")
-    parser.add_argument("--lgbm", action="store_true",
-                        help="Use LightGBM predictor instead of world model. "
-                             "Works with --interval 1m/5m/1h; features always computed from htf_1h.")
+    parser.add_argument("--lgbm", action="store_true", default=True,
+                        help="Use LightGBM predictor (default, only supported mode).")
     parser.add_argument("--scalp", action="store_true",
                         help="Enable 1m scalp layer (requires --lgbm)")
     parser.add_argument(
@@ -740,11 +513,10 @@ def main():
 
     dry_run = args.dry_run or os.environ.get("DRY_RUN", "true").lower() != "false"
     bph = {"1m": 60, "5m": 12, "1h": 1}.get(args.interval, 60)
-    log.info("Starting LiveTrader: symbol=%s device=%s dry_run=%s interval=%s",
-             args.symbol, args.device, dry_run, args.interval)
+    log.info("Starting LiveTrader: symbol=%s dry_run=%s interval=%s",
+             args.symbol, dry_run, args.interval)
 
-    trader = LiveTrader(args.symbol, device=args.device, dry_run=dry_run, bph=bph,
-                        use_swarm=args.swarm, use_lgbm=args.lgbm)
+    trader = LiveTrader(args.symbol, dry_run=dry_run, bph=bph, use_lgbm=True)
 
     if args.scalp:
         from lgbm.scalp_layer import ScalpLayer
@@ -761,24 +533,9 @@ def main():
     if args.warmup_bars > 0:
         _run_warmup(trader, args.symbol, n_bars=args.warmup_bars)
 
-    shadow = None
-    if not args.no_shadow and not args.swarm and not args.lgbm:
-        try:
-            from .shadow_trainer import ShadowTrainer, SWAP_COOLDOWN_S
-            from . import shadow_trainer as _st
-        except ImportError:
-            from shadow_trainer import ShadowTrainer, SWAP_COOLDOWN_S
-            import shadow_trainer as _st
-        _st.SWAP_COOLDOWN_S = args.swap_cooldown
-        shadow = ShadowTrainer(trader.wm, trader.ac, device=args.device, async_mode=True)
-        trader.shadow = shadow
-        shadow.start()
-
     # Graceful shutdown
     def _shutdown(sig, frame):
         log.info("Shutting down...")
-        if shadow is not None:
-            shadow.stop()
         sys.exit(0)
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)

@@ -133,7 +133,7 @@ SCALP_TP_PCT=0.0020
 | Win rate | 59.5% |
 | Total trades | 37 |
 
-*See [MODEL_CARD.md](docs/MODEL_CARD.md) for full results and caveats.*
+*Trending PF (1.362) is slightly below the 1.39 target gate — see [MODEL_CARD.md](docs/MODEL_CARD.md) for full results and caveats.*
 
 ---
 

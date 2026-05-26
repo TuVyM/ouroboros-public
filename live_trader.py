@@ -1,16 +1,22 @@
 """
-Production live trading loop.
+Live trading loop for Ouroboros LGBM system.
 
 Consumes closed candles from BinanceFeed WebSocket.
-Runs WM inference + actor decision each bar.
-Pushes experiences to ShadowTrainer daemon for continuous learning.
+Routes each bar through RegimeDetector → Trend or Range LGBM → position manager.
+Optional 1m scalp layer via --scalp flag.
 
 Usage:
-    python live_trader.py --symbol BTCUSDT --device cuda --dry-run
+    python live_trader.py --lgbm --dry-run --symbol BTCUSDT
+    python live_trader.py --lgbm --scalp --dry-run --symbol BTCUSDT --warmup-bars 500
 
-Environment variables (same as fast_backtest):
-    WORLD_MODEL_CHECKPOINT   — path to WM checkpoint dir
-    ACTOR_CRITIC_CHECKPOINT  — path to AC checkpoint dir
+Environment variables:
+    DRY_RUN                  — true/false (default true — no real orders)
+    MIN_CONFIDENCE           — minimum confidence to open a position (default 0.55)
+    MAX_POSITION_PCT         — Kelly fraction cap (default 0.02 = 2% of balance)
+    PAPER_PORTFOLIO_USDC     — starting paper balance (default 300.0)
+    SCALPER_BALANCE_FRACTION — fraction of balance for scalp layer (default 0.33)
+    SCALP_SL_PCT             — scalp stop-loss override (default ATR-based)
+    SCALP_TP_PCT             — scalp take-profit override (default ATR-based)
 """
 
 import argparse
@@ -56,7 +62,7 @@ except Exception:
     LGBMPredictor = None  # type: ignore[assignment,misc]
 
 try:
-    from lgbm.regime import RegimeDetector
+    from lgbm.regime_detector import RegimeDetector
 except Exception:
     RegimeDetector = None  # type: ignore[assignment,misc]
 

@@ -1,7 +1,7 @@
 # Ouroboros — LGBM + MultiScaleEncoder Model Card
 
 **As of:** 2026-05-24  
-**Status:** Live (dry-run) — `live_trader.py --lgbm --interval 5m --dry-run --symbol BTCUSDT`  
+**Status:** Live (dry-run) — `live_trader.py --lgbm --interval 1m --dry-run --symbol BTCUSDT`  
 **Symbol:** BTCUSDT (Binance Futures perpetual)  
 **Bar interval:** 5m live tick, 1h feature cadence
 

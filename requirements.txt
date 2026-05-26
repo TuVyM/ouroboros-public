@@ -2,7 +2,6 @@ lightgbm>=4.3
 numpy>=1.26
 torch>=2.2
 pandas>=2.2
-pandas-ta>=0.3
 scikit-learn>=1.4
 websocket-client>=1.7
 websockets>=12.0

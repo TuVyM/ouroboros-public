@@ -123,7 +123,7 @@ SCALP_TP_PCT=0.0020
 
 ---
 
-## Backtest Results (30-day, 1h bars)
+## Backtest Results (as of 2026-05-24, 30-day window, 1h bars)
 
 | Metric | Value |
 |---|---|

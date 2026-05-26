@@ -144,8 +144,8 @@ class LiveTrader:
                   timestamp_ms: int = 0) -> dict:
         """Process one closed candle. ohlcv: (5,) array [open,high,low,close,vol].
 
-        bvr: taker-buy volume fraction [0,1]. Pass (1+state.tick_delta)/2 from BinanceFeed;
-             defaults to 0.5 (neutral) when unavailable.
+        bvr: taker-buy volume fraction [0,1] — accepted for API compatibility but
+             not used in LGBM mode (features are HTF-derived). Pass 0.5 or omit.
         htf_1h: (N, 5) array of 1h candles — required when use_lgbm=True.
         timestamp_ms: close timestamp of the current 1m bar in milliseconds.
 
@@ -246,7 +246,7 @@ class LiveTrader:
 
             self.tick     += 1
             self._tick_1m += 1
-            return {'signal': sig, 'confidence': conf, 'regime': -1}
+            return {'signal': sig, 'confidence': conf, 'regime': result.get('regime', 'unknown')}
 
         # Unreachable in LGBM mode (raised in __init__), kept for type-checker
         return {'signal': 'hold', 'confidence': 0.0, 'regime': -1}
@@ -272,7 +272,7 @@ class LiveTrader:
                      and conf >= 0.40
 
             if self.position.regime == "ranging":
-                self._check_ranging_exit(price, is_buy, flip, price * atr_sl)
+                _ = self._check_ranging_exit(price, is_buy, flip, price * atr_sl)
             else:
                 tp_hit = (is_buy  and price >= self.position.take_profit) or \
                          (not is_buy and price <= self.position.take_profit)
@@ -581,14 +581,14 @@ def main():
                 trader._last_bar_ts = state.timestamp
             if scalp_result is not None:
                 log.info(
-                    "Bar: signal=%s conf=%.3f regime=%d "
+                    "Bar: signal=%s conf=%.3f regime=%s "
                     "scalp=%s scalp_conf=%.3f balance=%.2f scalp_balance=%.2f bvr=%.2f",
                     result['signal'], result['confidence'], result['regime'],
                     scalp_result['signal'], scalp_result['conf'],
                     trader.balance, trader._scalp.balance, bvr,
                 )
             else:
-                log.info("Bar: signal=%s conf=%.3f regime=%d balance=%.2f bvr=%.2f",
+                log.info("Bar: signal=%s conf=%.3f regime=%s balance=%.2f bvr=%.2f",
                          result['signal'], result['confidence'],
                          result['regime'], trader.balance, bvr)
     except KeyboardInterrupt:

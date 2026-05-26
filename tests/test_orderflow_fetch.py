@@ -3,10 +3,7 @@ import io
 import json
 import pandas as pd
 import pytest
-import sys
-from pathlib import Path
 from unittest.mock import patch, MagicMock
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orderflow.fetch import _parse_agg_csv, _parse_funding_response, _parse_oi_response
 

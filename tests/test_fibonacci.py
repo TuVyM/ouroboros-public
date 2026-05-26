@@ -1,10 +1,7 @@
 """Verify all Fibonacci constants are correct Fibonacci numbers or φ-derived values."""
 import math
 import re
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _PHI = (1 + math.sqrt(5)) / 2
 

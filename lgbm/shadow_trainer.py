@@ -5,8 +5,8 @@ LGBM shadow trainer — continuous self-improvement for LGBMPredictor.
 Every MIN_TRADE_BUFFER closed trades, incrementally retrains a shadow copy of
 the LGBM model by adding new trees (lgb.train with init_model). When the shadow
 model's profit factor on held-out trades exceeds the live model's PF by
-SWAP_PF_MARGIN, it atomically replaces lgbm/btc_model.lgbm and hot-reloads
-the live LGBMPredictor.
+SWAP_PF_MARGIN, it atomically replaces the live model file (btc_trend_model.lgbm
+or btc_range_model.lgbm) and hot-reloads the live LGBMPredictor.
 
 Signal encoding: sell=0, hold=1, buy=2.
 """

@@ -1,10 +1,7 @@
 # tests/test_lgbm_predictor.py
 import numpy as np
 import pytest
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lgbm.predictor import LGBMPredictor, MIN_CONFIDENCE, MIN_RANGE_CONFIDENCE
 from orderflow.features import N_FEATURES

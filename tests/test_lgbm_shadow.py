@@ -1,9 +1,6 @@
 # tests/test_lgbm_shadow.py
 import numpy as np
 import pytest
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lgbm.shadow_trainer import LGBMTradeBuffer, MIN_TRADE_BUFFER
 

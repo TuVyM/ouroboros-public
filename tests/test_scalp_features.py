@@ -1,11 +1,8 @@
-import sys
 from collections import deque
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orderflow.scalp_features import (
     SCALP_FEATURE_NAMES,

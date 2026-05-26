@@ -1,9 +1,6 @@
 # tests/test_fib_ob_features.py
 import numpy as np
 import pytest
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orderflow.fib_ob import (
     _fib_time_ob_features_batch,

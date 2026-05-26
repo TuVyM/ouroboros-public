@@ -1,17 +1,13 @@
 """
-fast_backtest.py — Batch backtest bypassing queue/threading overhead.
+fast_backtest.py — Batch backtester for the Ouroboros LGBM system.
 
-Speedup over main.py --backtest --no-teacher:
-  Phase 1: preprocess sequentially (RunningNorm correctness preserved)
-  Phase 2: Chronos encoding in batches of B=64 (10-20x GPU utilisation)
-  Phase 3: RSSM + executor inline — no queue, no threads, no JSONL writes
-
-Expected time: 30-day BTC ~3-5 min vs ~2hr with main.py
+Replays cached 1h OHLCV bars through RegimeDetector → Trend/Range LGBM →
+position manager, reporting profit factor, win rate, and trade log.
 
 Usage:
-  .venv/bin/python3 fast_backtest.py --symbol BTCUSDT --days 30
-  .venv/bin/python3 fast_backtest.py --symbol BTCUSDT --start-offset 2938685
-  .venv/bin/python3 fast_backtest.py --symbol BTCUSDT --days 30 --batch-size 128
+  python fast_backtest.py --mode lgbm --interval 1h
+  python fast_backtest.py --mode lgbm --interval 1h --days 30
+  python fast_backtest.py --mode lgbm --interval 1h --days 30 --trade-log trades.jsonl
 """
 import argparse
 import logging
@@ -63,7 +59,15 @@ except ImportError:
         WORLD_MODEL_WINDOW,
     )
     from backtest_feed import DATA_CACHE_DIR, _find_cache_file
-    from executor import STOP_LOSS_PCT, TRAIL_PCT, PROBE_SIZE_FRACTION, PROBE_HORIZON_MS, PROBE_COOLDOWN_MS
+    try:
+        from executor import STOP_LOSS_PCT, TRAIL_PCT, PROBE_SIZE_FRACTION, PROBE_HORIZON_MS, PROBE_COOLDOWN_MS
+    except ImportError:
+        # executor.py is not part of the public LGBM release — define safe fallbacks
+        STOP_LOSS_PCT        = 0.005
+        TRAIL_PCT            = 0.003
+        PROBE_SIZE_FRACTION  = 0.05
+        PROBE_HORIZON_MS     = 300_000
+        PROBE_COOLDOWN_MS    = 3_600_000
 
 # Fibonacci + ICT regime-adaptive take-profit multipliers (R:R = TP_dist / SL_dist)
 #   Trending  → φ² = 2.618  (ICT: ride the trend, target next liquidity)
@@ -565,8 +569,9 @@ def main():
                              "Requires --actor-critic. Saves checkpoint on each swap.")
     parser.add_argument("--shadow-sync", action="store_true",
                         help="(no-op) Sync shadow-trained weights back to checkpoint")
-    parser.add_argument("--mode", choices=["wm", "llm", "lgbm", "tcn"], default="wm",
-                        help="'wm' uses the world model (default); 'llm' uses the LLM swarm (qwen3:14b via Ollama); 'lgbm' uses LightGBM orderflow predictor; 'tcn' uses FibTCN multi-timeframe predictor")
+    parser.add_argument("--mode", choices=["lgbm", "wm", "llm", "tcn"], default="lgbm",
+                        help="'lgbm' (default) — LightGBM regime-routed predictor; "
+                             "'wm'/'llm'/'tcn' require additional dependencies not in this release")
     args = parser.parse_args()
 
     t_start = time.time()

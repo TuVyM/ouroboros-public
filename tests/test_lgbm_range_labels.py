@@ -1,8 +1,5 @@
 # tests/test_lgbm_range_labels.py
 import numpy as np
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lgbm.labels_range import value_area_labels, BUY, SELL, HOLD
 

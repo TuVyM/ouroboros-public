@@ -1,10 +1,7 @@
 # tests/test_range_features.py
 import numpy as np
 import pytest
-import sys
-from pathlib import Path
 from unittest.mock import patch
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orderflow.range_features import (
     _rsi, _compute_value_area, build_range_features,

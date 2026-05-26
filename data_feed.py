@@ -2,10 +2,10 @@
 Binance WebSocket data feed.
 
 Streams:
-  @aggTrade        — aggregated trades (sub-second, ~ms latency)
-                     Used to build 1s candles for high-frequency swarm ticks.
-  @kline_1m        — 1-minute closed candles (for world model training)
-  @depth5@100ms    — order book top-5 snapshots
+  @aggTrade        — aggregated trades; used to compute ob_imbalance and
+                     build 1s candles for liquidation/flow tracking
+  @kline_1m        — 1m closed candles (LGBM feature input and scalp inference)
+  @depth5@100ms    — order book top-5 snapshots (ob_imbalance feature)
 
 Tick hierarchy:
   tick_window  — last TICK_BUFFER_SIZE × 1s candles (built from aggTrades)

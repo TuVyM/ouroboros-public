@@ -1,14 +1,10 @@
 import logging
-import os
-import sys
 from collections import deque
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 CLOSE = 80_000.0
 

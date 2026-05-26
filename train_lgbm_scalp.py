@@ -79,7 +79,8 @@ def _build_htf_context(ohlcv_1m: np.ndarray, ts_1m: np.ndarray,
             # Force trending path for all regimes — avoids needing range features
             eff_regime = "trending" if str(regime) == "ranging" else str(regime)
             res = predictor.predict(f24, None, eff_regime, va)
-        except Exception:
+        except Exception as _e:
+            print(f"[WARN] predict failed at bar {i}: {_e} — using hold fallback")
             res = {"signal": "hold", "confidence": 0.0, "regime": str(regime)}
         htf_rows.append((
             int(t),
